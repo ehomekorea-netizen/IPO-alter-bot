@@ -59,6 +59,7 @@ export default function Home() {
 
   // Notification Permissions State
   const [notificationPermission, setNotificationPermission] = useState<string>('default');
+  const [isSubscribed, setIsSubscribed] = useState(false);
 
   const [settings, setSettings] = useState<SettingsConfig>({
     slackWebhookUrl: '',
@@ -167,6 +168,7 @@ export default function Home() {
           subscription: subscription.toJSON(),
         }, { merge: true });
         console.log('Successfully synchronized Push Subscription to Firestore.');
+        setIsSubscribed(true);
       }
     } catch (error) {
       console.error('Failed to subscribe/register Web Push:', error);
@@ -194,6 +196,7 @@ export default function Home() {
             const userSnap = await getDoc(userRef);
             if (userSnap.exists()) {
               const userData = userSnap.data();
+              setIsSubscribed(!!userData.subscription);
               if (userData.settings) {
                 setSettings(userData.settings);
                 fetchIpos(userData.settings);
@@ -237,6 +240,76 @@ export default function Home() {
     }
   };
 
+  const unsubscribeNotification = async () => {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+      return;
+    }
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.getSubscription();
+      if (subscription) {
+        await subscription.unsubscribe();
+        console.log('Successfully unsubscribed from Web Push.');
+      }
+      
+      // Update Firestore to remove subscription
+      if (user && isFirebaseConfigured && db) {
+        const userRef = doc(db, 'users', user.uid);
+        await setDoc(userRef, { subscription: null }, { merge: true });
+        console.log('Successfully removed subscription from Firestore.');
+      }
+      setIsSubscribed(false);
+    } catch (error) {
+      console.error('Failed to unsubscribe Web Push:', error);
+    }
+  };
+
+  const handleToggleSubscription = async (enable: boolean) => {
+    if (enable) {
+      if (typeof window !== 'undefined' && 'Notification' in window) {
+        try {
+          let permission: NotificationPermission;
+          const requestPromise = Notification.requestPermission();
+          
+          if (requestPromise && typeof requestPromise.then === 'function') {
+            permission = await requestPromise;
+          } else {
+            permission = await new Promise<NotificationPermission>((resolve) => {
+              Notification.requestPermission((p) => resolve(p));
+            });
+          }
+
+          setNotificationPermission(permission);
+          if (permission === 'granted' && user) {
+            await registerPushSubscription(user, true);
+          } else if (permission !== 'granted') {
+            alert('알림 권한을 승인해야 활성화할 수 있습니다.');
+          }
+        } catch (err) {
+          console.error('Failed to request notification permission:', err);
+        }
+      }
+    } else {
+      await unsubscribeNotification();
+    }
+  };
+
+  // Check actual active subscription in browser on mount/user change
+  useEffect(() => {
+    const checkActiveSubscription = async () => {
+      if (typeof window !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window) {
+        try {
+          const registration = await navigator.serviceWorker.ready;
+          const sub = await registration.pushManager.getSubscription();
+          setIsSubscribed(!!sub);
+        } catch (e) {
+          console.warn('Failed to check push subscription status:', e);
+        }
+      }
+    };
+    checkActiveSubscription();
+  }, [user]);
+
   // Fallback Settings loader for demo mode or default
   useEffect(() => {
     if (!user) {
@@ -258,13 +331,6 @@ export default function Home() {
       setNotificationPermission(Notification.permission);
     }
   }, [user]);
-
-  // Sync subscription when tab changes to settings and permission is already granted
-  useEffect(() => {
-    if (activeTab === 'settings' && user && typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-      registerPushSubscription(user);
-    }
-  }, [activeTab, user]);
 
   // Filter and Sort IPOs
   useEffect(() => {
@@ -554,6 +620,8 @@ export default function Home() {
               uid={user?.uid} 
               notificationPermission={notificationPermission}
               requestNotificationPermission={requestNotificationPermission}
+              isSubscribed={isSubscribed}
+              onToggleSubscription={handleToggleSubscription}
             />
           </div>
         )}
