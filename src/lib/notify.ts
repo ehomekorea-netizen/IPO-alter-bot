@@ -1,5 +1,7 @@
 import axios from 'axios';
 import { IpoItem } from './scraper';
+import webPush from 'web-push';
+
 
 export interface NotificationConfig {
   slackWebhookUrl?: string;
@@ -91,3 +93,47 @@ export async function sendNotifications(
 
   return { slackSuccess, telegramSuccess };
 }
+
+// VAPID Setup
+const vapidKeys = {
+  publicKey: process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || '',
+  privateKey: process.env.VAPID_PRIVATE_KEY || '',
+};
+
+if (vapidKeys.publicKey && vapidKeys.privateKey) {
+  try {
+    webPush.setVapidDetails(
+      'mailto:ehomekorea.netizen@gmail.com',
+      vapidKeys.publicKey,
+      vapidKeys.privateKey
+    );
+  } catch (err) {
+    console.error('Failed to set VAPID details:', err);
+  }
+}
+
+export async function sendWebPushNotification(
+  subscription: any,
+  title: string,
+  body: string,
+  url: string = '/'
+): Promise<boolean> {
+  try {
+    if (!vapidKeys.publicKey || !vapidKeys.privateKey) {
+      console.warn('VAPID keys not configured. Skipping Web Push.');
+      return false;
+    }
+    const payload = JSON.stringify({
+      title,
+      body,
+      icon: '/icon.png',
+      url,
+    });
+    await webPush.sendNotification(subscription, payload);
+    return true;
+  } catch (error) {
+    console.error('Web Push notification failed:', error);
+    return false;
+  }
+}
+

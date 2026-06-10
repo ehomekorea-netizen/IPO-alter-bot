@@ -2,6 +2,9 @@
 
 import React, { useState, useEffect } from 'react';
 import Settings, { SettingsConfig } from '@/components/settings';
+import { auth, db, googleProvider, isFirebaseConfigured } from '@/lib/firebase';
+import { signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 
 interface IpoItem {
   company: string;
@@ -16,17 +19,34 @@ interface IpoItem {
   detailUrl?: string;
 }
 
+// Utility to convert VAPID Key
+function urlBase64ToUint8Array(base64String: string) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
 export default function Home() {
   const [ipos, setIpos] = useState<IpoItem[]>([]);
   const [filteredIpos, setFilteredIpos] = useState<IpoItem[]>([]);
   const [loading, setLoading] = useState(true);
   
+  // Auth States
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [demoMode, setDemoMode] = useState(false);
+
   // Navigation & Tab States
   const [activeTab, setActiveTab] = useState<'list' | 'settings' | 'info'>('list');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'upcoming' | 'closed'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   
-  // Detail Modal (Bottom Sheet) State
+  // Detail Sheet Modal State
   const [selectedIpo, setSelectedIpo] = useState<IpoItem | null>(null);
   const [showBottomSheet, setShowBottomSheet] = useState(false);
   const [detailData, setDetailData] = useState<{
@@ -34,10 +54,6 @@ export default function Home() {
     news: Array<{ title: string; link: string; press: string; pubDate: string }>;
   } | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-
-  // Banner Notification State (In-App Toast)
-  const [toastMessage, setToastMessage] = useState<{ title: string; desc: string } | null>(null);
-  const [showToast, setShowToast] = useState(false);
 
   // Notification Permissions State
   const [notificationPermission, setNotificationPermission] = useState<string>('default');
@@ -58,7 +74,6 @@ export default function Home() {
       const data = await response.json();
       if (data.success) {
         setIpos(data.data);
-        triggerBannerAlert(data.data, currentSettings);
       }
     } catch (error) {
       console.error('Failed to fetch IPOs:', error);
@@ -82,85 +97,141 @@ export default function Home() {
     return `${year}-${month}-${day}`;
   };
 
-  // Trigger system notification & in-app banner for today's subscriptions
-  const triggerBannerAlert = (items: IpoItem[], currentSettings: SettingsConfig = settings) => {
-    const today = getSeoulToday();
-    const activeToday = items.filter(item => {
-      if (currentSettings.excludeSpac && item.isSpac) return false;
-      if (currentSettings.excludeReit && item.isReit) return false;
-      return item.startDate <= today && today <= item.endDate;
-    });
+  // Service Worker and Web Push Subscription handler
+  const registerPushSubscription = async (currentUser: User) => {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+      console.warn('Web Push or Service Worker is not supported by this browser.');
+      return;
+    }
 
-    if (activeToday.length > 0) {
-      const title = '📢 오늘 청약 진행 중!';
-      const desc = `${activeToday[0].company}${activeToday.length > 1 ? ` 외 ${activeToday.length - 1}건` : ''}의 청약이 진행 중입니다.`;
+    try {
+      // 1. Register service worker
+      const registration = await navigator.serviceWorker.register('/sw.js');
       
-      // 1. Show In-App Toast
-      setToastMessage({ title, desc });
-      setShowToast(true);
+      // 2. Query/request notification permission
+      let permission = Notification.permission;
+      setNotificationPermission(permission);
+      
+      if (permission === 'default') {
+        permission = await Notification.requestPermission();
+        setNotificationPermission(permission);
+      }
 
-      // Hide toast automatically after 5 seconds
-      setTimeout(() => {
-        setShowToast(false);
-      }, 5500);
+      if (permission !== 'granted') {
+        console.warn('Notification permission was denied.');
+        return;
+      }
 
-      // 2. Show Native OS Browser Banner (if allowed)
-      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-        new Notification(title, {
-          body: desc,
-          icon: '/icon.png',
+      // 3. Register Push subscription
+      let subscription = await registration.pushManager.getSubscription();
+      
+      if (!subscription) {
+        const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+        if (!vapidPublicKey) {
+          console.error('NEXT_PUBLIC_VAPID_PUBLIC_KEY environment variable is not defined.');
+          return;
+        }
+
+        const convertedVapidKey = urlBase64ToUint8Array(vapidPublicKey);
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: convertedVapidKey,
         });
       }
+
+      // 4. Update Firestore with subscription object
+      if (isFirebaseConfigured && db) {
+        const userRef = doc(db, 'users', currentUser.uid);
+        await setDoc(userRef, {
+          uid: currentUser.uid,
+          email: currentUser.email,
+          displayName: currentUser.displayName,
+          subscription: subscription.toJSON(),
+        }, { merge: true });
+        console.log('Successfully synchronized Push Subscription to Firestore.');
+      }
+    } catch (error) {
+      console.error('Failed to subscribe/register Web Push:', error);
     }
   };
 
-  // Request Notification permission
+  // Listen to Auth State
+  useEffect(() => {
+    if (!isFirebaseConfigured || !auth) {
+      setAuthLoading(false);
+      return;
+    }
+
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      setUser(currentUser);
+      setAuthLoading(false);
+      if (currentUser) {
+        // Logged in: register SW and sync push token
+        registerPushSubscription(currentUser);
+
+        // Load settings from Firestore
+        if (db) {
+          try {
+            const userRef = doc(db, 'users', currentUser.uid);
+            const userSnap = await getDoc(userRef);
+            if (userSnap.exists()) {
+              const userData = userSnap.data();
+              if (userData.settings) {
+                setSettings(userData.settings);
+                fetchIpos(userData.settings);
+                return;
+              }
+            }
+          } catch (e) {
+            console.error('Error loading Firestore settings on mount:', e);
+          }
+        }
+      }
+      fetchIpos();
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Request Notification permission manually
   const requestNotificationPermission = async () => {
     if (typeof window !== 'undefined' && 'Notification' in window) {
       const permission = await Notification.requestPermission();
       setNotificationPermission(permission);
-      if (permission === 'granted') {
-        new Notification('🔔 알림 활성화 완료', {
-          body: '이제 공모주 소식이 있을 때 시스템 배너 알림을 받으실 수 있습니다!',
-          icon: '/icon.png',
-        });
+      if (permission === 'granted' && user) {
+        // Triggers SW registration and subscription sync
+        registerPushSubscription(user);
       }
     }
   };
 
+  // Fallback Settings loader for demo mode or default
   useEffect(() => {
-    // Load settings from local storage immediately on mount before fetching
-    let currentSettings = {
-      slackWebhookUrl: '',
-      telegramBotToken: '',
-      telegramChatId: '',
-      excludeSpac: true,
-      excludeReit: false,
-    };
-    const saved = localStorage.getItem('ipo_bot_settings');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        currentSettings = { ...currentSettings, ...parsed };
-        setSettings(currentSettings);
-      } catch (e) {
-        console.error('Failed to parse settings', e);
+    if (!user) {
+      const saved = localStorage.getItem('ipo_bot_settings');
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          setSettings(prev => ({ ...prev, ...parsed }));
+          fetchIpos({ ...settings, ...parsed });
+        } catch (e) {
+          console.error(e);
+        }
+      } else {
+        fetchIpos();
       }
     }
-
-    fetchIpos(currentSettings);
-
+    
     if (typeof window !== 'undefined' && 'Notification' in window) {
       setNotificationPermission(Notification.permission);
     }
-  }, []);
+  }, [user]);
 
   // Filter and Sort IPOs
   useEffect(() => {
     const today = getSeoulToday();
     let result = [...ipos];
 
-    // 1. Exclude based on settings
     if (settings.excludeSpac) {
       result = result.filter(item => !item.isSpac);
     }
@@ -168,7 +239,6 @@ export default function Home() {
       result = result.filter(item => !item.isReit);
     }
 
-    // 2. Filter by search query
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
       result = result.filter(
@@ -178,29 +248,23 @@ export default function Home() {
       );
     }
 
-    // 3. Group and Sort
     const active = result.filter(item => item.startDate <= today && today <= item.endDate);
     const upcoming = result.filter(item => today < item.startDate);
     const closed = result.filter(item => item.endDate < today);
 
-    // Sort active: closing soonest first
     active.sort((a, b) => a.endDate.localeCompare(b.endDate));
-    // Sort upcoming: starting soonest first
     upcoming.sort((a, b) => a.startDate.localeCompare(b.startDate));
-    // Sort closed: recently closed first (newest date first)
     closed.sort((a, b) => b.endDate.localeCompare(a.endDate));
 
-    // 4. Combine based on selected status filter tab
     let finalResult: IpoItem[] = [];
     if (statusFilter === 'all') {
-      // In the "All" tab, show active first, then upcoming, and limit closed to 5 items to avoid long scrolling
       finalResult = [...active, ...upcoming, ...closed.slice(0, 5)];
     } else if (statusFilter === 'active') {
       finalResult = active;
     } else if (statusFilter === 'upcoming') {
       finalResult = upcoming;
     } else if (statusFilter === 'closed') {
-      finalResult = closed; // Show all closed items in the dedicated closed tab
+      finalResult = closed;
     }
 
     setFilteredIpos(finalResult);
@@ -208,6 +272,25 @@ export default function Home() {
 
   const handleSettingsChange = (newSettings: SettingsConfig) => {
     setSettings(newSettings);
+  };
+
+  const handleLogin = async () => {
+    if (!isFirebaseConfigured || !auth || !googleProvider) return;
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (e) {
+      console.error('Google Sign-In failed:', e);
+    }
+  };
+
+  const handleLogout = async () => {
+    if (!isFirebaseConfigured || !auth) return;
+    try {
+      await signOut(auth);
+      setUser(null);
+    } catch (e) {
+      console.error('Logout failed:', e);
+    }
   };
 
   const getIpoStatus = (item: IpoItem) => {
@@ -250,6 +333,71 @@ export default function Home() {
     setShowBottomSheet(false);
   };
 
+  // Render Premium Login View when Firebase is Configured but user is not logged in
+  if (authLoading) {
+    return (
+      <div className="login-screen" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: 'var(--bg-app)' }}>
+        <div className="spinner" aria-label="인증 확인 중"></div>
+      </div>
+    );
+  }
+
+  if (isFirebaseConfigured && !user && !demoMode) {
+    return (
+      <div className="login-screen">
+        <div className="login-glass-card">
+          <div className="login-logo-container">
+            <span className="login-logo-emoji">🔔</span>
+          </div>
+          <h2 className="login-title">IPO Schedule Bot</h2>
+          <p className="login-subtitle">실시간 공모주 알림 SaaS 서비스</p>
+          <p className="login-description">
+            구글 로그인을 통해 기기 네이티브 웹 푸시(Web Push) 알림을 구독하세요. 앱을 켜두지 않아도 청약 시작과 일정 소식을 즉시 수신할 수 있습니다.
+          </p>
+          
+          <button className="btn-google-login" onClick={handleLogin}>
+            <svg className="google-icon" viewBox="0 0 24 24" width="20" height="20" xmlns="http://www.w3.org/2000/svg">
+              <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+              <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+              <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FBBC05"/>
+              <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.62 2.84c.88-2.6 3.3-4.52 6.2-4.52z" fill="#EA4335"/>
+            </svg>
+            Google 계정으로 계속하기
+          </button>
+          
+          <button className="btn-demo-bypass" onClick={() => setDemoMode(true)}>
+            로그인 없이 둘러보기 (데모)
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Render Configuration Helper when Firebase setup is absent
+  if (!isFirebaseConfigured && !demoMode) {
+    return (
+      <div className="login-screen">
+        <div className="login-glass-card" style={{ maxWidth: '440px' }}>
+          <div className="login-logo-container" style={{ background: 'rgba(239, 68, 68, 0.1)' }}>
+            <span className="login-logo-emoji" style={{ filter: 'none' }}>⚙️</span>
+          </div>
+          <h2 className="login-title" style={{ fontSize: '1.25rem' }}>Firebase 설정이 필요합니다</h2>
+          <p className="login-description" style={{ fontSize: '0.8rem', textAlign: 'left', lineHeight: '1.6' }}>
+            구글 로그인 및 Firestore 저장 기능을 사용하려면 Firebase 프로젝트 설정이 필요합니다.
+            <br /><br />
+            1. <code>.env.local</code> 파일에 Firebase API Key 등의 변수 값을 채워주세요.
+            <br />
+            2. VAPID Key는 기본값으로 셋팅되어 있습니다.
+          </p>
+          
+          <button className="btn-google-login" style={{ background: 'var(--primary-purple)' }} onClick={() => setDemoMode(true)}>
+            데모/로컬 모드로 진입하기
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app-shell">
       <h1 className="sr-only">IPO Schedule Bot - 실시간 공모주 청약 알림 서비스</h1>
@@ -257,35 +405,27 @@ export default function Home() {
       {/* Top App Bar */}
       <header className="top-app-bar" aria-label="상단 메뉴바">
         <h1>IPO Schedule Bot</h1>
-        <button
-          onClick={() => fetchIpos()}
-          disabled={loading}
-          style={{ background: 'transparent', border: 'none', color: 'var(--text-main)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
-          aria-label="데이터 새로고침"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            style={{ width: '20px', height: '20px', animation: loading ? 'spin 1s linear infinite' : 'none' }}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <button
+            onClick={() => fetchIpos()}
+            disabled={loading}
+            style={{ background: 'transparent', border: 'none', color: 'var(--text-main)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+            aria-label="데이터 새로고침"
           >
-            <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
-          </svg>
-        </button>
-      </header>
-
-      {/* In-App Toast Banner */}
-      <div className={`toast-banner ${showToast ? 'show' : ''}`} role="alert" aria-live="assertive">
-        <span style={{ fontSize: '1.25rem' }}>🔔</span>
-        <div className="toast-banner-content">
-          <div className="toast-banner-title">{toastMessage?.title}</div>
-          <div className="toast-banner-desc">{toastMessage?.desc}</div>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              style={{ width: '18px', height: '18px', animation: loading ? 'spin 1s linear infinite' : 'none' }}
+            >
+              <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
+            </svg>
+          </button>
         </div>
-        <button className="toast-banner-close" onClick={() => setShowToast(false)} aria-label="알림 닫기">×</button>
-      </div>
+      </header>
 
       {/* Content Viewports */}
       <main className="app-content">
@@ -370,7 +510,7 @@ export default function Home() {
             <h2 className="page-title">
               <span>⚙️</span> 알림 및 필터 설정
             </h2>
-            <Settings onSettingsChange={handleSettingsChange} />
+            <Settings onSettingsChange={handleSettingsChange} uid={user?.uid} />
           </div>
         )}
 
@@ -381,19 +521,44 @@ export default function Home() {
               <span>ℹ️</span> 애플리케이션 정보
             </h2>
 
+            {/* User Account Info */}
+            <div className="app-card" style={{ cursor: 'default' }}>
+              <h3 style={{ fontSize: '0.95rem', marginBottom: '0.75rem', fontWeight: '700', color: '#c084fc' }}>👤 내 계정 정보</h3>
+              {user ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-main)' }}>
+                    <div><strong>이름:</strong> {user.displayName}</div>
+                    <div style={{ marginTop: '0.25rem' }}><strong>이메일:</strong> {user.email}</div>
+                  </div>
+                  <button className="btn btn-secondary" style={{ alignSelf: 'flex-start', fontSize: '0.75rem', padding: '0.4rem 0.8rem' }} onClick={handleLogout}>
+                    로그아웃
+                  </button>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                    데모 모드 상태입니다. 전체 기능을 사용하려면 구글 로그인이 필요합니다.
+                  </p>
+                  <button className="btn btn-primary" style={{ alignSelf: 'flex-start', fontSize: '0.75rem', padding: '0.4rem 0.8rem' }} onClick={() => setDemoMode(false)}>
+                    로그인 페이지로 이동
+                  </button>
+                </div>
+              )}
+            </div>
+
             {/* Native Banner Alerts */}
             <div className="app-card" style={{ cursor: 'default' }}>
-              <h3 style={{ fontSize: '0.95rem', marginBottom: '0.5rem', fontWeight: '700', color: '#8b5cf6' }}>🔔 기기 배너 알림 설정</h3>
+              <h3 style={{ fontSize: '0.95rem', marginBottom: '0.5rem', fontWeight: '700', color: '#8b5cf6' }}>🔔 OS 웹 푸시 알림</h3>
               <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '1rem', lineHeight: '1.4' }}>
-                활성화 시, 이 웹앱을 열 때 오늘 청약이 시작되거나 진행 중인 공모주가 있으면 스마트폰 화면 상단에 시스템 배너 알림을 즉시 띄워줍니다.
+                구독 시, 브라우저 백그라운드 서비스 워커가 백엔드 서버(Cron)와 연동하여 앱이 꺼져 있어도 OS 네이티브 알림 배너로 청약 소식을 즉시 띄워줍니다.
               </p>
               {notificationPermission === 'granted' ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#10b981', fontSize: '0.8rem', fontWeight: '600' }}>
-                  <span>✓</span> 기기 배너 알림이 활성화되어 있습니다.
+                  <span>✓</span> 기기 웹 푸시 알림이 활성화되어 있습니다.
                 </div>
               ) : (
                 <button className="btn btn-primary" onClick={requestNotificationPermission}>
-                  배너 알림 승인하기
+                  네이티브 배너 알림 구독
                 </button>
               )}
             </div>
@@ -412,10 +577,10 @@ export default function Home() {
 
             {/* App Info */}
             <div className="app-card" style={{ cursor: 'default', textAlign: 'center', padding: '1.5rem' }}>
-              <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem', fontWeight: '700' }}>IPO Schedule Bot v2.0</h3>
+              <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem', fontWeight: '700' }}>IPO Schedule Bot v3.0</h3>
               <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', lineHeight: '1.6' }}>
-                본 앱은 38.co.kr의 공식 청약 데이터를 수집하여 공모주 재테크를 돕는 도우미 봇 서비스입니다.<br />
-                서버 비용 부담 없이 완전한 오픈소스로 가동되며, 로컬 스토리지를 활용하여 안전하게 동작합니다.
+                본 앱은 38.co.kr의 공식 청약 데이터를 수집하여 공모주 재테크를 돕는 SaaS형 도우미 봇 서비스입니다.<br />
+                Firebase Auth 및 Firestore를 통해 안전하고 단독적인 다중 알림 환경을 구축합니다.
               </p>
             </div>
           </div>
@@ -617,3 +782,4 @@ export default function Home() {
     </div>
   );
 }
+

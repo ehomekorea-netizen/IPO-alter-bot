@@ -1,6 +1,8 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { db, isFirebaseConfigured } from '@/lib/firebase';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 
 export interface SettingsConfig {
   slackWebhookUrl: string;
@@ -12,9 +14,10 @@ export interface SettingsConfig {
 
 interface SettingsProps {
   onSettingsChange?: (settings: SettingsConfig) => void;
+  uid?: string;
 }
 
-export default function Settings({ onSettingsChange }: SettingsProps) {
+export default function Settings({ onSettingsChange, uid }: SettingsProps) {
   const [settings, setSettings] = useState<SettingsConfig>({
     slackWebhookUrl: '',
     telegramBotToken: '',
@@ -30,24 +33,63 @@ export default function Settings({ onSettingsChange }: SettingsProps) {
   } | null>(null);
 
   useEffect(() => {
-    const saved = localStorage.getItem('ipo_bot_settings');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        const merged = { ...settings, ...parsed };
-        setSettings(merged);
-        if (onSettingsChange) {
-          onSettingsChange(merged);
+    const loadSettings = async () => {
+      // 1. Try to load from Firestore first if logged in
+      if (uid && isFirebaseConfigured && db) {
+        try {
+          const userRef = doc(db, 'users', uid);
+          const userSnap = await getDoc(userRef);
+          if (userSnap.exists()) {
+            const userData = userSnap.data();
+            if (userData.settings) {
+              const merged = { ...settings, ...userData.settings };
+              setSettings(merged);
+              if (onSettingsChange) {
+                onSettingsChange(merged);
+              }
+              return;
+            }
+          }
+        } catch (e) {
+          console.error('Failed to load settings from Firestore:', e);
         }
+      }
+
+      // 2. Fallback to LocalStorage
+      const saved = localStorage.getItem('ipo_bot_settings');
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          const merged = { ...settings, ...parsed };
+          setSettings(merged);
+          if (onSettingsChange) {
+            onSettingsChange(merged);
+          }
+        } catch (e) {
+          console.error('Failed to parse settings', e);
+        }
+      }
+    };
+
+    loadSettings();
+  }, [uid]);
+
+  const saveSettings = async (newSettings: SettingsConfig) => {
+    setSettings(newSettings);
+    
+    // Save to LocalStorage for fallback
+    localStorage.setItem('ipo_bot_settings', JSON.stringify(newSettings));
+    
+    // Save to Firestore if logged in
+    if (uid && isFirebaseConfigured && db) {
+      try {
+        const userRef = doc(db, 'users', uid);
+        await setDoc(userRef, { settings: newSettings }, { merge: true });
       } catch (e) {
-        console.error('Failed to parse settings', e);
+        console.error('Failed to save settings to Firestore:', e);
       }
     }
-  }, []);
 
-  const saveSettings = (newSettings: SettingsConfig) => {
-    setSettings(newSettings);
-    localStorage.setItem('ipo_bot_settings', JSON.stringify(newSettings));
     if (onSettingsChange) {
       onSettingsChange(newSettings);
     }
@@ -64,23 +106,30 @@ export default function Settings({ onSettingsChange }: SettingsProps) {
     setLoading(true);
     setTestResult(null);
     try {
+      const payload: any = {
+        type,
+      };
+
+      if (uid) {
+        payload.uid = uid;
+      } else {
+        payload.config = {
+          slackWebhookUrl: settings.slackWebhookUrl || undefined,
+          telegramBotToken: settings.telegramBotToken || undefined,
+          telegramChatId: settings.telegramChatId || undefined,
+        };
+        payload.options = {
+          excludeSpac: settings.excludeSpac,
+          excludeReit: settings.excludeReit,
+        };
+      }
+
       const response = await fetch('/api/cron', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          config: {
-            slackWebhookUrl: settings.slackWebhookUrl || undefined,
-            telegramBotToken: settings.telegramBotToken || undefined,
-            telegramChatId: settings.telegramChatId || undefined,
-          },
-          type,
-          options: {
-            excludeSpac: settings.excludeSpac,
-            excludeReit: settings.excludeReit,
-          },
-        }),
+        body: JSON.stringify(payload),
       });
 
       const data = await response.json();
@@ -94,12 +143,13 @@ export default function Settings({ onSettingsChange }: SettingsProps) {
           successMsg = `다음주 일정 발송 완료! (총 ${data.sentCount}건)`;
         }
 
-        const slackStatus = data.result.slackSuccess ? 'Slack:성공' : 'Slack:안됨';
-        const telegramStatus = data.result.telegramSuccess ? 'Tele:성공' : 'Tele:안됨';
+        const slackStatus = data.result?.slackSuccess ? 'Slack:성공' : 'Slack:안됨';
+        const telegramStatus = data.result?.telegramSuccess ? 'Tele:성공' : 'Tele:안됨';
+        const webPushStatus = data.result?.webPushSuccess ? 'WebPush:성공' : 'WebPush:안됨';
 
         setTestResult({
           success: true,
-          message: `${successMsg} (${slackStatus}, ${telegramStatus})`,
+          message: `${successMsg} (${slackStatus}, ${telegramStatus}, ${webPushStatus})`,
         });
       } else {
         setTestResult({
@@ -263,3 +313,4 @@ export default function Settings({ onSettingsChange }: SettingsProps) {
     </div>
   );
 }
+

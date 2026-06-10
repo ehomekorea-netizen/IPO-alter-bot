@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
 import { scrapeIpo, IpoItem } from '@/lib/scraper';
-import { sendNotifications, NotificationConfig } from '@/lib/notify';
+import { sendNotifications, sendWebPushNotification, NotificationConfig } from '@/lib/notify';
+import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
+import { db, isFirebaseConfigured } from '@/lib/firebase';
 
 // Date utility to get Asia/Seoul date
 function getSeoulDateInfo() {
-  // Get current date/time in Seoul
   const formatter = new Intl.DateTimeFormat('ko-KR', {
     timeZone: 'Asia/Seoul',
     year: 'numeric',
@@ -17,20 +18,17 @@ function getSeoulDateInfo() {
   const year = parts.find(p => p.type === 'year')!.value;
   const month = parts.find(p => p.type === 'month')!.value;
   const day = parts.find(p => p.type === 'day')!.value;
-  const weekday = parts.find(p => p.type === 'weekday')!.value; // "일", "월" 등
+  const weekday = parts.find(p => p.type === 'weekday')!.value;
 
-  const todayStr = `${year}-${month}-${day}`; // YYYY-MM-DD
+  const todayStr = `${year}-${month}-${day}`;
   
-  // Date math for next week
   const seoulNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' }));
-  const dayOfWeek = seoulNow.getDay(); // 0 = Sun, 1 = Mon, ..., 6 = Sat
+  const dayOfWeek = seoulNow.getDay();
   
-  // Next Monday
   const daysToNextMonday = dayOfWeek === 0 ? 1 : 8 - dayOfWeek;
   const nextMonday = new Date(seoulNow);
   nextMonday.setDate(seoulNow.getDate() + daysToNextMonday);
   
-  // Next Sunday
   const nextSunday = new Date(nextMonday);
   nextSunday.setDate(nextMonday.getDate() + 6);
 
@@ -57,69 +55,110 @@ export async function GET(request: Request) {
     const authHeader = request.headers.get('authorization');
     const cronSecret = process.env.CRON_SECRET;
     
-    // If CRON_SECRET is configured, we require matching Bearer token
     if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
+    if (!isFirebaseConfigured || !db) {
+      return NextResponse.json({
+        success: false,
+        message: 'Firebase is not configured on the server.',
+      });
+    }
+
     const { today, weekday, nextWeekStart, nextWeekEnd } = getSeoulDateInfo();
     
-    // Determine type: default is daily, but Sunday (일) defaults to weekly
     let type: 'daily' | 'weekly' = 'daily';
     const typeParam = searchParams.get('type');
     if (typeParam === 'weekly' || (typeParam !== 'daily' && weekday === '일')) {
       type = 'weekly';
     }
 
-    // Load credentials from environment
-    const config: NotificationConfig = {
-      slackWebhookUrl: process.env.SLACK_WEBHOOK_URL,
-      telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
-      telegramChatId: process.env.TELEGRAM_CHAT_ID,
-    };
+    // 1. Fetch all users from Firestore
+    const usersCol = collection(db, 'users');
+    const userSnap = await getDocs(usersCol);
 
-    if (!config.slackWebhookUrl && (!config.telegramBotToken || !config.telegramChatId)) {
-      return NextResponse.json({
-        success: false,
-        message: 'No notifications configured in environment variables.',
-      });
-    }
-
-    // Exclude SPAC/REIT based on environment preferences (default to exclude SPACs, include REITs)
-    const excludeSpac = process.env.EXCLUDE_SPAC !== 'false';
-    const excludeReit = process.env.EXCLUDE_REIT === 'true';
-
-    const allIpos = await scrapeIpo({ excludeSpac, excludeReit });
-    let sendList: IpoItem[] = [];
-
-    if (type === 'daily') {
-      // Find IPOs active today
-      sendList = allIpos.filter(item => {
-        return item.startDate <= today && today <= item.endDate;
-      });
-    } else {
-      // Find IPOs starting next week
-      sendList = allIpos.filter(item => {
-        return item.startDate >= nextWeekStart && item.startDate <= nextWeekEnd;
-      });
-    }
-
-    // If nothing to alert, we can just finish
-    if (sendList.length === 0) {
+    if (userSnap.empty) {
       return NextResponse.json({
         success: true,
-        message: `No IPO items found for ${type} alarm (${today}).`,
+        message: `No users registered in database (${today}).`,
         sent: false,
       });
     }
 
-    const result = await sendNotifications(config, sendList, type);
+    // 2. Scrape the full list of IPOs (include everything, filter per user)
+    const allIpos = await scrapeIpo({ excludeSpac: false, excludeReit: false });
+    
+    let sentCount = 0;
+    const details = [];
+
+    // 3. Send alerts to each user based on their specific configuration
+    for (const userDoc of userSnap.docs) {
+      const userData = userDoc.data();
+      const settings = userData.settings || {};
+      const subscription = userData.subscription;
+
+      const excludeSpac = settings.excludeSpac !== false;
+      const excludeReit = settings.excludeReit === true;
+
+      // Filter for this user's preferences
+      let userIpos = allIpos.filter(item => {
+        if (excludeSpac && item.isSpac) return false;
+        if (excludeReit && item.isReit) return false;
+        return true;
+      });
+
+      let sendList: IpoItem[] = [];
+      if (type === 'daily') {
+        sendList = userIpos.filter(item => item.startDate <= today && today <= item.endDate);
+      } else {
+        sendList = userIpos.filter(item => item.startDate >= nextWeekStart && item.startDate <= nextWeekEnd);
+      }
+
+      if (sendList.length === 0) {
+        continue;
+      }
+
+      // 4. Configure & Send notifications
+      const config: NotificationConfig = {
+        slackWebhookUrl: settings.slackWebhookUrl || undefined,
+        telegramBotToken: settings.telegramBotToken || undefined,
+        telegramChatId: settings.telegramChatId || undefined,
+      };
+
+      const hasExternalNotify = config.slackWebhookUrl || (config.telegramBotToken && config.telegramChatId);
+      let extResult = { slackSuccess: false, telegramSuccess: false };
+      
+      if (hasExternalNotify) {
+        extResult = await sendNotifications(config, sendList, type);
+      }
+
+      let webPushSuccess = false;
+      if (subscription) {
+        const title = type === 'daily' ? '📢 오늘 청약 진행 중!' : '🗓️ 다음주 청약 예정 일정!';
+        const desc = `${sendList[0].company}${sendList.length > 1 ? ` 외 ${sendList.length - 1}건` : ''}의 청약 소식이 있습니다.`;
+        webPushSuccess = await sendWebPushNotification(subscription, title, desc, '/');
+      }
+
+      if (hasExternalNotify || webPushSuccess) {
+        sentCount++;
+      }
+
+      details.push({
+        uid: userDoc.id,
+        email: userData.email || null,
+        slack: extResult.slackSuccess,
+        telegram: extResult.telegramSuccess,
+        webPush: webPushSuccess,
+      });
+    }
+
     return NextResponse.json({
       success: true,
-      message: `Successfully processed ${type} alarm.`,
+      message: `Successfully processed ${type} alarm for multiple users.`,
       sent: true,
-      sentCount: sendList.length,
-      result,
+      sentCount,
+      details,
     });
   } catch (error: any) {
     console.error('Cron GET failed:', error);
@@ -130,29 +169,49 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { config, type, options } = body as {
-      config: NotificationConfig;
+    const { uid, config, type, options, subscription } = body as {
+      uid?: string;
+      config?: NotificationConfig;
       type: 'daily' | 'weekly' | 'test';
       options?: { excludeSpac?: boolean; excludeReit?: boolean };
+      subscription?: any;
     };
 
-    if (!config || (!config.slackWebhookUrl && (!config.telegramBotToken || !config.telegramChatId))) {
-      return NextResponse.json(
-        { success: false, error: 'Slack Webhook URL or Telegram Bot credentials are required' },
-        { status: 400 }
-      );
+    let finalConfig: NotificationConfig = {};
+    let finalOptions = options || { excludeSpac: true, excludeReit: false };
+    let finalSubscription: any = subscription;
+
+    // Resolve credentials from Firestore if uid is supplied
+    if (uid && isFirebaseConfigured && db) {
+      const userRef = doc(db, 'users', uid);
+      const userSnap = await getDoc(userRef);
+      if (userSnap.exists()) {
+        const userData = userSnap.data();
+        const userSettings = userData.settings || {};
+        finalConfig = {
+          slackWebhookUrl: userSettings.slackWebhookUrl || undefined,
+          telegramBotToken: userSettings.telegramBotToken || undefined,
+          telegramChatId: userSettings.telegramChatId || undefined,
+        };
+        finalOptions = {
+          excludeSpac: userSettings.excludeSpac !== false,
+          excludeReit: userSettings.excludeReit === true,
+        };
+        finalSubscription = userData.subscription || null;
+      }
+    } else if (config) {
+      finalConfig = config;
     }
 
     const { today, nextWeekStart, nextWeekEnd } = getSeoulDateInfo();
     const allIpos = await scrapeIpo({
-      excludeSpac: options?.excludeSpac,
-      excludeReit: options?.excludeReit,
+      excludeSpac: finalOptions.excludeSpac,
+      excludeReit: finalOptions.excludeReit,
     });
 
     let sendList: IpoItem[] = [];
 
     if (type === 'test') {
-      // For test, just send the first 3 items or everything
       sendList = allIpos.slice(0, 3);
     } else if (type === 'daily') {
       sendList = allIpos.filter(item => item.startDate <= today && today <= item.endDate);
@@ -160,14 +219,30 @@ export async function POST(request: Request) {
       sendList = allIpos.filter(item => item.startDate >= nextWeekStart && item.startDate <= nextWeekEnd);
     }
 
-    const result = await sendNotifications(config, sendList, type);
+    let extResult = { slackSuccess: false, telegramSuccess: false };
+    const hasExternalNotify = finalConfig.slackWebhookUrl || (finalConfig.telegramBotToken && finalConfig.telegramChatId);
+    if (hasExternalNotify && sendList.length > 0) {
+      extResult = await sendNotifications(finalConfig, sendList, type);
+    }
+
+    let webPushSuccess = false;
+    if (finalSubscription && sendList.length > 0) {
+      const title = type === 'test' ? '🔔 알림 테스트' : type === 'daily' ? '📢 오늘 청약 진행 중!' : '🗓️ 다음주 청약 예정 일정!';
+      const desc = `${sendList[0].company}${sendList.length > 1 ? ` 외 ${sendList.length - 1}건` : ''}의 청약 소식이 있습니다.`;
+      webPushSuccess = await sendWebPushNotification(finalSubscription, title, desc, '/');
+    }
+
     return NextResponse.json({
       success: true,
       sentCount: sendList.length,
-      result,
+      result: {
+        ...extResult,
+        webPushSuccess,
+      },
     });
   } catch (error: any) {
     console.error('Cron POST failed:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
+
