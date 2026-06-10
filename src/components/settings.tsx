@@ -36,11 +36,17 @@ export default function Settings({
   });
 
 
+  const [isPushSupported, setIsPushSupported] = useState(true);
   const [loading, setLoading] = useState(false);
   const [testResult, setTestResult] = useState<{
     success: boolean;
     message: string;
   } | null>(null);
+
+  useEffect(() => {
+    const supported = typeof window !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+    setIsPushSupported(supported);
+  }, []);
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -199,7 +205,14 @@ export default function Settings({
         <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '1rem', lineHeight: '1.4' }}>
           구독 시, 브라우저가 완전히 꺼져있거나 스마트폰이 대기 상태여도 기기 네이티브 알림 배너로 청약 소식을 매일 아침 수신합니다.
         </p>
-        {notificationPermission === 'granted' ? (
+        {!isPushSupported ? (
+          <div style={{ padding: '0.75rem', borderRadius: '0.5rem', background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.15)', color: '#f87171', fontSize: '0.75rem', lineHeight: '1.5' }}>
+            ⚠️ 현재 사용 중인 브라우저/앱은 기기 네이티브 알림(Web Push)을 지원하지 않습니다.
+            <br />
+            <strong>Chrome(안드로이드)</strong> 또는 <strong>Safari(아이폰)</strong> 브라우저로 접속해 주세요.
+            (카카오톡/인스타 등 인앱 브라우저나 일부 커스텀 웹뷰에서는 작동하지 않습니다.)
+          </div>
+        ) : notificationPermission === 'granted' ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#10b981', fontSize: '0.8rem', fontWeight: '600' }}>
               <span>✓</span> 기기 웹 푸시 알림이 활성화되어 있습니다.
@@ -210,6 +223,15 @@ export default function Settings({
               onClick={requestNotificationPermission}
             >
               알림 구독 정보 다시 동기화
+            </button>
+          </div>
+        ) : notificationPermission === 'denied' ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            <div style={{ padding: '0.75rem', borderRadius: '0.5rem', background: 'rgba(245, 158, 11, 0.08)', border: '1px solid rgba(245, 158, 11, 0.15)', color: '#fbbf24', fontSize: '0.75rem', lineHeight: '1.5' }}>
+              🚫 알림 권한이 차단되어 있습니다. 알림을 받으시려면 브라우저 설정(사이트 설정)에서 알림 권한을 <strong>'허용'</strong>으로 재설정해 주세요.
+            </div>
+            <button className="btn btn-primary" onClick={requestNotificationPermission}>
+              알림 권한 다시 요청하기
             </button>
           </div>
         ) : (

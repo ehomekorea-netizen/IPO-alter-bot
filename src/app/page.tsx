@@ -103,7 +103,7 @@ export default function Home() {
 
   // Service Worker and Web Push Subscription handler
   const registerPushSubscription = async (currentUser: User, force: boolean = false) => {
-    if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
       console.warn('Web Push or Service Worker is not supported by this browser.');
       return;
     }
@@ -214,11 +214,25 @@ export default function Home() {
   // Request Notification permission manually
   const requestNotificationPermission = async () => {
     if (typeof window !== 'undefined' && 'Notification' in window) {
-      const permission = await Notification.requestPermission();
-      setNotificationPermission(permission);
-      if (permission === 'granted' && user) {
-        // Triggers SW registration and subscription sync (force fresh subscription)
-        registerPushSubscription(user, true);
+      try {
+        let permission: NotificationPermission;
+        const requestPromise = Notification.requestPermission();
+        
+        if (requestPromise && typeof requestPromise.then === 'function') {
+          permission = await requestPromise;
+        } else {
+          permission = await new Promise<NotificationPermission>((resolve) => {
+            Notification.requestPermission((p) => resolve(p));
+          });
+        }
+
+        setNotificationPermission(permission);
+        if (permission === 'granted' && user) {
+          // Triggers SW registration and subscription sync (force fresh subscription)
+          registerPushSubscription(user, true);
+        }
+      } catch (err) {
+        console.error('Failed to request notification permission:', err);
       }
     }
   };
