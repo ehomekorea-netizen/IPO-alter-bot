@@ -16,9 +16,16 @@ export interface SettingsConfig {
 interface SettingsProps {
   onSettingsChange?: (settings: SettingsConfig) => void;
   uid?: string;
+  notificationPermission?: string;
+  requestNotificationPermission?: () => Promise<void>;
 }
 
-export default function Settings({ onSettingsChange, uid }: SettingsProps) {
+export default function Settings({ 
+  onSettingsChange, 
+  uid, 
+  notificationPermission = 'default', 
+  requestNotificationPermission 
+}: SettingsProps) {
   const [settings, setSettings] = useState<SettingsConfig>({
     slackWebhookUrl: '',
     telegramBotToken: '',
@@ -184,99 +191,26 @@ export default function Settings({ onSettingsChange, uid }: SettingsProps) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-      {/* Slack Section */}
+      {/* 1. OS Web Push Notification Section */}
       <div className="app-card" style={{ cursor: 'default' }}>
-        <h3 style={{ fontSize: '0.95rem', marginBottom: '0.75rem', color: '#38bdf8', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-          <span>💬</span> Slack 알림 설정
+        <h3 style={{ fontSize: '0.95rem', marginBottom: '0.5rem', fontWeight: '700', color: '#8b5cf6', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+          <span>🔔</span> OS 웹 푸시 알림
         </h3>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-          <label htmlFor="slackWebhookUrl" style={{ fontSize: '0.75rem' }}>Incoming Webhook URL</label>
-          <input
-            type="text"
-            id="slackWebhookUrl"
-            name="slackWebhookUrl"
-            value={settings.slackWebhookUrl}
-            onChange={handleInputChange}
-            placeholder="https://hooks.slack.com/services/..."
-            style={{ fontSize: '0.8rem' }}
-          />
-        </div>
+        <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '1rem', lineHeight: '1.4' }}>
+          구독 시, 브라우저가 완전히 꺼져있거나 스마트폰이 대기 상태여도 기기 네이티브 알림 배너로 청약 소식을 매일 아침 수신합니다.
+        </p>
+        {notificationPermission === 'granted' ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#10b981', fontSize: '0.8rem', fontWeight: '600' }}>
+            <span>✓</span> 기기 웹 푸시 알림이 활성화되어 있습니다.
+          </div>
+        ) : (
+          <button className="btn btn-primary" onClick={requestNotificationPermission}>
+            네이티브 배너 알림 구독
+          </button>
+        )}
       </div>
 
-      {/* Telegram Section */}
-      <div className="app-card" style={{ cursor: 'default' }}>
-        <h3 style={{ fontSize: '0.95rem', marginBottom: '0.75rem', color: '#3b82f6', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-          <span>✈️</span> Telegram 알림 설정
-        </h3>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-            <label htmlFor="telegramBotToken" style={{ fontSize: '0.75rem' }}>Bot Token</label>
-            <input
-              type="password"
-              id="telegramBotToken"
-              name="telegramBotToken"
-              value={settings.telegramBotToken}
-              onChange={handleInputChange}
-              placeholder="봇 토큰 입력"
-              style={{ fontSize: '0.8rem' }}
-            />
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-            <label htmlFor="telegramChatId" style={{ fontSize: '0.75rem' }}>Chat ID</label>
-            <input
-              type="text"
-              id="telegramChatId"
-              name="telegramChatId"
-              value={settings.telegramChatId}
-              onChange={handleInputChange}
-              placeholder="채팅방 ID 입력"
-              style={{ fontSize: '0.8rem' }}
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* Filtering Section */}
-      <div className="app-card" style={{ cursor: 'default' }}>
-        <h3 style={{ fontSize: '0.95rem', marginBottom: '0.75rem', color: '#a78bfa', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-          <span>🔍</span> 필터 및 제외 설정
-        </h3>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
-          <div className="flex-between">
-            <div>
-              <span style={{ fontSize: '0.85rem', fontWeight: '600' }}>스팩(SPAC) 종목 제외</span>
-              <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>스팩 종목을 목록에서 제외합니다.</p>
-            </div>
-            <label className="toggle-switch">
-              <input
-                type="checkbox"
-                name="excludeSpac"
-                checked={settings.excludeSpac}
-                onChange={handleInputChange}
-              />
-              <span className="slider"></span>
-            </label>
-          </div>
-
-          <div className="flex-between">
-            <div>
-              <span style={{ fontSize: '0.85rem', fontWeight: '600' }}>리츠(REITs) 종목 제외</span>
-              <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>리츠 종목을 목록에서 제외합니다.</p>
-            </div>
-            <label className="toggle-switch">
-              <input
-                type="checkbox"
-                name="excludeReit"
-                checked={settings.excludeReit}
-                onChange={handleInputChange}
-              />
-              <span className="slider"></span>
-            </label>
-          </div>
-        </div>
-      </div>
-
-      {/* Alarm Timing Section */}
+      {/* 2. Alarm Timing Section */}
       <div className="app-card" style={{ cursor: 'default' }}>
         <h3 style={{ fontSize: '0.95rem', marginBottom: '0.75rem', color: '#10b981', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
           <span>⏰</span> 알림 수신 시점 설정
@@ -287,7 +221,7 @@ export default function Settings({ onSettingsChange, uid }: SettingsProps) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
           {(
             [
-              { key: 'both', label: '시작일 & 마감일 모두 수신 (추천)', desc: '청약 기간(보통 2일) 동안 매일 알림을 받습니다.' },
+              { key: 'both', label: '시작일 & 마감일만 수신 (추천)', desc: '청약 시작하는 날과 끝나는 마지막 날 아침에만 받습니다.' },
               { key: 'start', label: '청약 시작일 당일에만 수신', desc: '청약이 시작되는 첫날 아침에만 한 번 받습니다.' },
               { key: 'end', label: '청약 마감일 당일에만 수신', desc: '청약이 마감되는 둘째 날 아침에만 받습니다.' },
             ] as const
@@ -328,8 +262,47 @@ export default function Settings({ onSettingsChange, uid }: SettingsProps) {
         </div>
       </div>
 
+      {/* 3. Filtering Section */}
+      <div className="app-card" style={{ cursor: 'default' }}>
+        <h3 style={{ fontSize: '0.95rem', marginBottom: '0.75rem', color: '#a78bfa', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+          <span>🔍</span> 필터 및 제외 설정
+        </h3>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+          <div className="flex-between">
+            <div>
+              <span style={{ fontSize: '0.85rem', fontWeight: '600' }}>스팩(SPAC) 종목 제외</span>
+              <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>스팩 종목을 목록에서 제외합니다.</p>
+            </div>
+            <label className="toggle-switch">
+              <input
+                type="checkbox"
+                name="excludeSpac"
+                checked={settings.excludeSpac}
+                onChange={handleInputChange}
+              />
+              <span className="slider"></span>
+            </label>
+          </div>
 
-      {/* Manual Actions */}
+          <div className="flex-between">
+            <div>
+              <span style={{ fontSize: '0.85rem', fontWeight: '600' }}>리츠(REITs) 종목 제외</span>
+              <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>리츠 종목을 목록에서 제외합니다.</p>
+            </div>
+            <label className="toggle-switch">
+              <input
+                type="checkbox"
+                name="excludeReit"
+                checked={settings.excludeReit}
+                onChange={handleInputChange}
+              />
+              <span className="slider"></span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      {/* 4. Manual Actions */}
       <div className="app-card" style={{ cursor: 'default' }}>
         <h3 style={{ fontSize: '0.95rem', marginBottom: '0.75rem', color: '#10b981', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
           <span>⚡</span> 수동 알림 즉시 발송

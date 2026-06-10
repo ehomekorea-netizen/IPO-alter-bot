@@ -512,9 +512,15 @@ export default function Home() {
             <h2 className="page-title">
               <span>⚙️</span> 알림 및 필터 설정
             </h2>
-            <Settings onSettingsChange={handleSettingsChange} uid={user?.uid} />
+            <Settings 
+              onSettingsChange={handleSettingsChange} 
+              uid={user?.uid} 
+              notificationPermission={notificationPermission}
+              requestNotificationPermission={requestNotificationPermission}
+            />
           </div>
         )}
+
 
         {activeTab === 'info' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
@@ -548,25 +554,9 @@ export default function Home() {
               )}
             </div>
 
-            {/* Native Banner Alerts */}
-            <div className="app-card" style={{ cursor: 'default' }}>
-              <h3 style={{ fontSize: '0.95rem', marginBottom: '0.5rem', fontWeight: '700', color: '#8b5cf6' }}>🔔 OS 웹 푸시 알림</h3>
-              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '1rem', lineHeight: '1.4' }}>
-                구독 시, 브라우저 백그라운드 서비스 워커가 백엔드 서버(Cron)와 연동하여 앱이 꺼져 있어도 OS 네이티브 알림 배너로 청약 소식을 즉시 띄워줍니다.
-              </p>
-              {notificationPermission === 'granted' ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#10b981', fontSize: '0.8rem', fontWeight: '600' }}>
-                  <span>✓</span> 기기 웹 푸시 알림이 활성화되어 있습니다.
-                </div>
-              ) : (
-                <button className="btn btn-primary" onClick={requestNotificationPermission}>
-                  네이티브 배너 알림 구독
-                </button>
-              )}
-            </div>
-
             {/* PWA Guide */}
             <div className="app-card" style={{ cursor: 'default' }}>
+
               <h3 style={{ fontSize: '0.95rem', marginBottom: '0.5rem', fontWeight: '700', color: '#10b981' }}>📱 홈 화면에 앱 설치하기</h3>
               <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
                 <strong>iOS Safari</strong>:<br />

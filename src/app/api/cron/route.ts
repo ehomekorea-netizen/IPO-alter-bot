@@ -110,9 +110,11 @@ export async function GET(request: Request) {
           } else if (pushTiming === 'end') {
             return item.endDate === today;
           } else {
-            return item.startDate <= today && today <= item.endDate;
+            // both: only notify on the start date or end date
+            return item.startDate === today || item.endDate === today;
           }
         });
+
       } else {
         sendList = userIpos.filter(item => item.startDate >= nextWeekStart && item.startDate <= nextWeekEnd);
       }
@@ -225,9 +227,11 @@ export async function POST(request: Request) {
         } else if (pushTiming === 'end') {
           return item.endDate === today;
         } else {
-          return item.startDate <= today && today <= item.endDate;
+          // both: only notify on the start date or end date
+          return item.startDate === today || item.endDate === today;
         }
       });
+
     } else if (type === 'weekly') {
       sendList = allIpos.filter(item => item.startDate >= nextWeekStart && item.startDate <= nextWeekEnd);
     }
