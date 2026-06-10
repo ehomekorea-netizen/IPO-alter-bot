@@ -200,8 +200,17 @@ export default function Settings({
           구독 시, 브라우저가 완전히 꺼져있거나 스마트폰이 대기 상태여도 기기 네이티브 알림 배너로 청약 소식을 매일 아침 수신합니다.
         </p>
         {notificationPermission === 'granted' ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#10b981', fontSize: '0.8rem', fontWeight: '600' }}>
-            <span>✓</span> 기기 웹 푸시 알림이 활성화되어 있습니다.
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#10b981', fontSize: '0.8rem', fontWeight: '600' }}>
+              <span>✓</span> 기기 웹 푸시 알림이 활성화되어 있습니다.
+            </div>
+            <button 
+              className="btn btn-secondary" 
+              style={{ fontSize: '0.75rem', padding: '0.4rem 0.8rem', marginTop: '0.25rem' }} 
+              onClick={requestNotificationPermission}
+            >
+              알림 구독 정보 다시 동기화
+            </button>
           </div>
         ) : (
           <button className="btn btn-primary" onClick={requestNotificationPermission}>

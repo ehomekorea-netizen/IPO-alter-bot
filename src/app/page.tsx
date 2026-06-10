@@ -21,8 +21,10 @@ interface IpoItem {
 
 // Utility to convert VAPID Key
 function urlBase64ToUint8Array(base64String: string) {
-  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const padding = '='.repeat((4 - (base64String.replace(/=/g, '').length % 4)) % 4);
+  const base64 = (base64String.replace(/=/g, '') + padding)
+    .replace(/-/g, '+')
+    .replace(/_/g, '/');
   const rawData = window.atob(base64);
   const outputArray = new Uint8Array(rawData.length);
   for (let i = 0; i < rawData.length; ++i) {
@@ -100,7 +102,7 @@ export default function Home() {
   };
 
   // Service Worker and Web Push Subscription handler
-  const registerPushSubscription = async (currentUser: User) => {
+  const registerPushSubscription = async (currentUser: User, force: boolean = false) => {
     if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
       console.warn('Web Push or Service Worker is not supported by this browser.');
       return;
@@ -109,6 +111,9 @@ export default function Home() {
     try {
       // 1. Register service worker
       const registration = await navigator.serviceWorker.register('/sw.js');
+      
+      // Wait for service worker to be active
+      await navigator.serviceWorker.ready;
       
       // 2. Query/request notification permission
       let permission = Notification.permission;
@@ -127,6 +132,16 @@ export default function Home() {
       // 3. Register Push subscription
       let subscription = await registration.pushManager.getSubscription();
       
+      if (force && subscription) {
+        try {
+          await subscription.unsubscribe();
+          subscription = null;
+          console.log('Unsubscribed old push subscription to force a fresh sync.');
+        } catch (e) {
+          console.warn('Failed to unsubscribe old subscription:', e);
+        }
+      }
+
       if (!subscription) {
         const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
         if (!vapidPublicKey) {
@@ -134,7 +149,8 @@ export default function Home() {
           return;
         }
 
-        const convertedVapidKey = urlBase64ToUint8Array(vapidPublicKey);
+        const cleanKey = vapidPublicKey.trim().replace(/['"]/g, '');
+        const convertedVapidKey = urlBase64ToUint8Array(cleanKey);
         subscription = await registration.pushManager.subscribe({
           userVisibleOnly: true,
           applicationServerKey: convertedVapidKey,
@@ -201,8 +217,8 @@ export default function Home() {
       const permission = await Notification.requestPermission();
       setNotificationPermission(permission);
       if (permission === 'granted' && user) {
-        // Triggers SW registration and subscription sync
-        registerPushSubscription(user);
+        // Triggers SW registration and subscription sync (force fresh subscription)
+        registerPushSubscription(user, true);
       }
     }
   };
@@ -228,6 +244,13 @@ export default function Home() {
       setNotificationPermission(Notification.permission);
     }
   }, [user]);
+
+  // Sync subscription when tab changes to settings and permission is already granted
+  useEffect(() => {
+    if (activeTab === 'settings' && user && typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+      registerPushSubscription(user);
+    }
+  }, [activeTab, user]);
 
   // Filter and Sort IPOs
   useEffect(() => {
