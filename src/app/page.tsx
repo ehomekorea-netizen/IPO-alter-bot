@@ -13,6 +13,7 @@ interface IpoItem {
   broker: string;
   isSpac: boolean;
   isReit: boolean;
+  detailUrl?: string;
 }
 
 export default function Home() {
@@ -28,6 +29,11 @@ export default function Home() {
   // Detail Modal (Bottom Sheet) State
   const [selectedIpo, setSelectedIpo] = useState<IpoItem | null>(null);
   const [showBottomSheet, setShowBottomSheet] = useState(false);
+  const [detailData, setDetailData] = useState<{
+    details: Record<string, string>;
+    news: Array<{ title: string; link: string; press: string; pubDate: string }>;
+  } | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   // Banner Notification State (In-App Toast)
   const [toastMessage, setToastMessage] = useState<{ title: string; desc: string } | null>(null);
@@ -215,9 +221,29 @@ export default function Home() {
     }
   };
 
-  const openDetails = (item: IpoItem) => {
+  const openDetails = async (item: IpoItem) => {
     setSelectedIpo(item);
     setShowBottomSheet(true);
+    
+    if (!item.detailUrl) return;
+    
+    setDetailLoading(true);
+    setDetailData(null);
+    try {
+      const url = `/api/ipos/detail?url=${encodeURIComponent(item.detailUrl)}&company=${encodeURIComponent(item.company)}`;
+      const response = await fetch(url);
+      const data = await response.json();
+      if (data.success) {
+        setDetailData({
+          details: data.details,
+          news: data.news,
+        });
+      }
+    } catch (e) {
+      console.error('Failed to fetch IPO detail', e);
+    } finally {
+      setDetailLoading(false);
+    }
   };
 
   const closeDetails = () => {
@@ -444,44 +470,145 @@ export default function Home() {
         onClick={closeDetails}
         aria-hidden="true"
       />
-      
       <div
         className={`bottom-sheet ${showBottomSheet ? 'show' : ''}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="sheet-title"
+        style={{ display: 'flex', flexDirection: 'column', maxHeight: '85vh' }}
       >
         <div className="bottom-sheet-drag" onClick={closeDetails} />
         {selectedIpo && (
-          <div>
-            <h2 id="sheet-title" style={{ fontSize: '1.25rem', fontWeight: '700', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <h2 id="sheet-title" style={{ fontSize: '1.25rem', fontWeight: '700', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
               {selectedIpo.company}
               {selectedIpo.isSpac && <span className="badge badge-accent">스팩</span>}
               {selectedIpo.isReit && <span className="badge badge-accent">리츠</span>}
             </h2>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginBottom: '1.25rem' }}>
-              <div className="detail-row">
-                <span className="detail-label">청약 일정</span>
-                <span className="detail-val" style={{ color: '#fbbf24' }}>{selectedIpo.date}</span>
+            {/* Scrollable details wrapper */}
+            <div style={{ flex: 1, overflowY: 'auto', paddingRight: '0.25rem', marginBottom: '1rem' }} className="app-content-scroll">
+              
+              {/* 1. Subscription Details */}
+              <h3 style={{ fontSize: '0.9rem', color: '#a78bfa', fontWeight: '700', marginBottom: '0.5rem' }}>📋 공모 및 청약 정보</h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem', marginBottom: '1rem' }}>
+                <div className="detail-row">
+                  <span className="detail-label">청약 일정</span>
+                  <span className="detail-val" style={{ color: '#fbbf24' }}>{selectedIpo.date}</span>
+                </div>
+                <div className="detail-row">
+                  <span className="detail-label">희망 공모가액</span>
+                  <span className="detail-val">{selectedIpo.hopePrice}원</span>
+                </div>
+                <div className="detail-row">
+                  <span className="detail-label">확정 공모가격</span>
+                  <span className="detail-val" style={{ color: '#34d399', fontWeight: '700' }}>
+                    {selectedIpo.finalPrice !== '-' ? `${selectedIpo.finalPrice}원` : '미확정'}
+                  </span>
+                </div>
+                <div className="detail-row">
+                  <span className="detail-label">주간 증권사</span>
+                  <span className="detail-val" style={{ color: '#c084fc' }}>{selectedIpo.broker}</span>
+                </div>
+                {detailData?.details['총공모주식수'] && (
+                  <div className="detail-row">
+                    <span className="detail-label">총 공모주식수</span>
+                    <span className="detail-val">{detailData.details['총공모주식수']}</span>
+                  </div>
+                )}
+                {detailData?.details['기관경쟁률'] && (
+                  <div className="detail-row">
+                    <span className="detail-label">수요예측 기관경쟁률</span>
+                    <span className="detail-val" style={{ color: '#f59e0b', fontWeight: '700' }}>{detailData.details['기관경쟁률']}</span>
+                  </div>
+                )}
+                {detailData?.details['의무보유확약'] && (
+                  <div className="detail-row">
+                    <span className="detail-label">의무보유확약 비율</span>
+                    <span className="detail-val" style={{ color: '#10b981', fontWeight: '700' }}>{detailData.details['의무보유확약']}</span>
+                  </div>
+                )}
+                {detailData?.details['환불일'] && (
+                  <div className="detail-row">
+                    <span className="detail-label">환불일 / 납입일</span>
+                    <span className="detail-val">{detailData.details['환불일']}</span>
+                  </div>
+                )}
+                {detailData?.details['상장일'] && (
+                  <div className="detail-row">
+                    <span className="detail-label">상장 예정일</span>
+                    <span className="detail-val" style={{ fontWeight: '700' }}>{detailData.details['상장일']}</span>
+                  </div>
+                )}
               </div>
-              <div className="detail-row">
-                <span className="detail-label">희망 공모가액</span>
-                <span className="detail-val">{selectedIpo.hopePrice}원</span>
-              </div>
-              <div className="detail-row">
-                <span className="detail-label">확정 공모가격</span>
-                <span className="detail-val" style={{ color: '#34d399', fontWeight: '700' }}>
-                  {selectedIpo.finalPrice !== '-' ? `${selectedIpo.finalPrice}원` : '미확정'}
-                </span>
-              </div>
-              <div className="detail-row">
-                <span className="detail-label">주간 증권사</span>
-                <span className="detail-val" style={{ color: '#a78bfa' }}>{selectedIpo.broker}</span>
-              </div>
+
+              {/* 2. Company Analysis Profile */}
+              {!selectedIpo.isSpac && !selectedIpo.isReit && (
+                <>
+                  <h3 style={{ fontSize: '0.9rem', color: '#3b82f6', fontWeight: '700', marginBottom: '0.5rem' }}>🏢 기업 개요 및 분석</h3>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem', marginBottom: '1.25rem' }}>
+                    <div className="detail-row">
+                      <span className="detail-label">시장 / 종목코드</span>
+                      <span className="detail-val">{detailData?.details['시장구분'] || '-'} / {detailData?.details['종목코드'] || '-'}</span>
+                    </div>
+                    <div className="detail-row">
+                      <span className="detail-label">기업 업종 (사업 모델)</span>
+                      <span className="detail-val" style={{ color: '#38bdf8', fontWeight: '600' }}>{detailData?.details['업종'] || (detailLoading ? '로딩 중...' : '-')}</span>
+                    </div>
+                    <div className="detail-row">
+                      <span className="detail-label">대표자명</span>
+                      <span className="detail-val">{detailData?.details['대표자'] || '-'}</span>
+                    </div>
+                    <div className="detail-row">
+                      <span className="detail-label">직전년도 매출액</span>
+                      <span className="detail-val">{detailData?.details['매출액'] || '-'}</span>
+                    </div>
+                    <div className="detail-row">
+                      <span className="detail-label">직전년도 순이익</span>
+                      <span className="detail-val">{detailData?.details['순이익'] || '-'}</span>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* 3. Real-time News list */}
+              <h3 style={{ fontSize: '0.9rem', color: '#10b981', fontWeight: '700', marginBottom: '0.5rem' }}>📰 실시간 관련 뉴스</h3>
+              {detailLoading ? (
+                <div className="spinner" style={{ margin: '1rem auto', width: '24px', height: '24px' }} aria-label="상세 분석 정보 가져오는 중"></div>
+              ) : detailData?.news && detailData.news.length > 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {detailData.news.map((n, idx) => (
+                    <a
+                      key={idx}
+                      href={n.link}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="app-card"
+                      style={{
+                        display: 'block',
+                        padding: '0.75rem',
+                        margin: 0,
+                        textDecoration: 'none',
+                        background: 'rgba(255, 255, 255, 0.02)',
+                        border: '1px solid rgba(255, 255, 255, 0.04)',
+                      }}
+                    >
+                      <div style={{ fontSize: '0.8rem', fontWeight: '700', color: '#f3f4f6', marginBottom: '0.25rem', lineHeight: '1.4' }}>
+                        {n.title}
+                      </div>
+                      <div className="flex-between" style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                        <span>{n.press}</span>
+                        <span>{n.pubDate.split(' ').slice(1, 4).join(' ')}</span>
+                      </div>
+                    </a>
+                  ))}
+                </div>
+              ) : (
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textAlign: 'center', padding: '1rem 0' }}>관련 뉴스가 없습니다.</p>
+              )}
             </div>
 
-            <button className="btn btn-secondary" onClick={closeDetails} style={{ width: '100%' }}>
+            <button className="btn btn-secondary" onClick={closeDetails} style={{ width: '100%', flexShrink: 0 }}>
               닫기
             </button>
           </div>

@@ -12,6 +12,7 @@ export interface IpoItem {
   broker: string;
   isSpac: boolean;
   isReit: boolean;
+  detailUrl?: string;
 }
 
 export interface ScrapeOptions {
@@ -109,6 +110,12 @@ export async function scrapeIpo(options: ScrapeOptions = {}): Promise<IpoItem[]>
 
           const { startDate, endDate } = parseDateRange(date);
 
+          const a = $(tds[0]).find('a');
+          const detailHref = a.attr('href') || '';
+          const detailUrl = detailHref 
+            ? (detailHref.startsWith('http') ? detailHref : (detailHref.startsWith('/') ? `http://www.38.co.kr${detailHref}` : `http://www.38.co.kr/html/fund/${detailHref}`))
+            : '';
+
           ipoList.push({
             company,
             date,
@@ -119,6 +126,7 @@ export async function scrapeIpo(options: ScrapeOptions = {}): Promise<IpoItem[]>
             broker,
             isSpac,
             isReit,
+            detailUrl,
           });
         }
       }
