@@ -106,23 +106,33 @@ export default function Settings({ onSettingsChange, uid }: SettingsProps) {
     setLoading(true);
     setTestResult(null);
     try {
-      const payload: any = {
-        type,
-      };
+      // Get current service worker push subscription for instant testing
+      let subscription = null;
+      if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+        try {
+          const registration = await navigator.serviceWorker.ready;
+          const sub = await registration.pushManager.getSubscription();
+          if (sub) {
+            subscription = sub.toJSON();
+          }
+        } catch (e) {
+          console.warn('Failed to resolve SW subscription for test trigger:', e);
+        }
+      }
 
-      if (uid) {
-        payload.uid = uid;
-      } else {
-        payload.config = {
+      const payload = {
+        type,
+        config: {
           slackWebhookUrl: settings.slackWebhookUrl || undefined,
           telegramBotToken: settings.telegramBotToken || undefined,
           telegramChatId: settings.telegramChatId || undefined,
-        };
-        payload.options = {
+        },
+        options: {
           excludeSpac: settings.excludeSpac,
           excludeReit: settings.excludeReit,
-        };
-      }
+        },
+        subscription,
+      };
 
       const response = await fetch('/api/cron', {
         method: 'POST',
@@ -166,6 +176,7 @@ export default function Settings({ onSettingsChange, uid }: SettingsProps) {
       setLoading(false);
     }
   };
+
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
