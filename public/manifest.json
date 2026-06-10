@@ -1,0 +1,18 @@
+{
+  "name": "IPO Schedule Bot",
+  "short_name": "IPO Bot",
+  "description": "실시간 공모주 청약 일정 대시보드 및 메신저 알림 서비스",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#060713",
+  "theme_color": "#060713",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
