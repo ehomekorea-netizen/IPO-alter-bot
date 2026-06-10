@@ -50,14 +50,6 @@ function getSeoulDateInfo() {
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    
-    // Authorization Check
-    const authHeader = request.headers.get('authorization');
-    const cronSecret = process.env.CRON_SECRET;
-    
-    if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
-      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    }
 
     if (!isFirebaseConfigured || !db) {
       return NextResponse.json({
@@ -65,6 +57,7 @@ export async function GET(request: Request) {
         message: 'Firebase is not configured on the server.',
       });
     }
+
 
     const { today, weekday, nextWeekStart, nextWeekEnd } = getSeoulDateInfo();
     
