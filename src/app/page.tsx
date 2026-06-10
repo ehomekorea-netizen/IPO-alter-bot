@@ -64,7 +64,9 @@ export default function Home() {
     telegramChatId: '',
     excludeSpac: true,
     excludeReit: false,
+    pushTiming: 'both',
   });
+
 
   // Fetch IPOs
   const fetchIpos = async (currentSettings: SettingsConfig = settings) => {

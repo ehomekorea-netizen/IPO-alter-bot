@@ -10,6 +10,7 @@ export interface SettingsConfig {
   telegramChatId: string;
   excludeSpac: boolean;
   excludeReit: boolean;
+  pushTiming: 'both' | 'start' | 'end';
 }
 
 interface SettingsProps {
@@ -24,7 +25,9 @@ export default function Settings({ onSettingsChange, uid }: SettingsProps) {
     telegramChatId: '',
     excludeSpac: true,
     excludeReit: false,
+    pushTiming: 'both',
   });
+
 
   const [loading, setLoading] = useState(false);
   const [testResult, setTestResult] = useState<{
@@ -130,6 +133,7 @@ export default function Settings({ onSettingsChange, uid }: SettingsProps) {
         options: {
           excludeSpac: settings.excludeSpac,
           excludeReit: settings.excludeReit,
+          pushTiming: settings.pushTiming,
         },
         subscription,
       };
@@ -271,6 +275,59 @@ export default function Settings({ onSettingsChange, uid }: SettingsProps) {
           </div>
         </div>
       </div>
+
+      {/* Alarm Timing Section */}
+      <div className="app-card" style={{ cursor: 'default' }}>
+        <h3 style={{ fontSize: '0.95rem', marginBottom: '0.75rem', color: '#10b981', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+          <span>⏰</span> 알림 수신 시점 설정
+        </h3>
+        <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '0.9rem', lineHeight: '1.4' }}>
+          스케줄러가 매일 아침 작동할 때, 언제 기기 알림(웹 푸시)을 수신할지 선택합니다.
+        </p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+          {(
+            [
+              { key: 'both', label: '시작일 & 마감일 모두 수신 (추천)', desc: '청약 기간(보통 2일) 동안 매일 알림을 받습니다.' },
+              { key: 'start', label: '청약 시작일 당일에만 수신', desc: '청약이 시작되는 첫날 아침에만 한 번 받습니다.' },
+              { key: 'end', label: '청약 마감일 당일에만 수신', desc: '청약이 마감되는 둘째 날 아침에만 받습니다.' },
+            ] as const
+          ).map(opt => (
+            <label
+              key={opt.key}
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '0.6rem',
+                padding: '0.6rem',
+                borderRadius: '0.5rem',
+                background: settings.pushTiming === opt.key ? 'rgba(16, 185, 129, 0.05)' : 'rgba(255, 255, 255, 0.01)',
+                border: `1px solid ${settings.pushTiming === opt.key ? 'rgba(16, 185, 129, 0.2)' : 'var(--glass-border)'}`,
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+              }}
+            >
+              <input
+                type="radio"
+                name="pushTiming"
+                value={opt.key}
+                checked={settings.pushTiming === opt.key}
+                onChange={() => {
+                  const updated = { ...settings, pushTiming: opt.key };
+                  saveSettings(updated);
+                }}
+                style={{ width: 'auto', marginTop: '0.2rem', cursor: 'pointer' }}
+              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+                <span style={{ fontSize: '0.8rem', fontWeight: '600', color: settings.pushTiming === opt.key ? '#34d399' : 'var(--text-main)' }}>
+                  {opt.label}
+                </span>
+                <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>{opt.desc}</span>
+              </div>
+            </label>
+          ))}
+        </div>
+      </div>
+
 
       {/* Manual Actions */}
       <div className="app-card" style={{ cursor: 'default' }}>

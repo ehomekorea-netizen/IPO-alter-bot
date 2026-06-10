@@ -103,10 +103,20 @@ export async function GET(request: Request) {
 
       let sendList: IpoItem[] = [];
       if (type === 'daily') {
-        sendList = userIpos.filter(item => item.startDate <= today && today <= item.endDate);
+        const pushTiming = settings.pushTiming || 'both';
+        sendList = userIpos.filter(item => {
+          if (pushTiming === 'start') {
+            return item.startDate === today;
+          } else if (pushTiming === 'end') {
+            return item.endDate === today;
+          } else {
+            return item.startDate <= today && today <= item.endDate;
+          }
+        });
       } else {
         sendList = userIpos.filter(item => item.startDate >= nextWeekStart && item.startDate <= nextWeekEnd);
       }
+
 
       if (sendList.length === 0) {
         continue;
@@ -166,12 +176,12 @@ export async function POST(request: Request) {
       uid?: string;
       config?: NotificationConfig;
       type: 'daily' | 'weekly' | 'test';
-      options?: { excludeSpac?: boolean; excludeReit?: boolean };
+      options?: { excludeSpac?: boolean; excludeReit?: boolean; pushTiming?: 'both' | 'start' | 'end' };
       subscription?: any;
     };
 
     let finalConfig: NotificationConfig = {};
-    let finalOptions = options || { excludeSpac: true, excludeReit: false };
+    let finalOptions = options || { excludeSpac: true, excludeReit: false, pushTiming: 'both' };
     let finalSubscription: any = subscription;
 
     // Resolve credentials from Firestore if uid is supplied
@@ -189,6 +199,7 @@ export async function POST(request: Request) {
         finalOptions = {
           excludeSpac: userSettings.excludeSpac !== false,
           excludeReit: userSettings.excludeReit === true,
+          pushTiming: userSettings.pushTiming || 'both',
         };
         finalSubscription = userData.subscription || null;
       }
@@ -203,14 +214,24 @@ export async function POST(request: Request) {
     });
 
     let sendList: IpoItem[] = [];
+    const pushTiming = finalOptions.pushTiming || 'both';
 
     if (type === 'test') {
       sendList = allIpos.slice(0, 3);
     } else if (type === 'daily') {
-      sendList = allIpos.filter(item => item.startDate <= today && today <= item.endDate);
+      sendList = allIpos.filter(item => {
+        if (pushTiming === 'start') {
+          return item.startDate === today;
+        } else if (pushTiming === 'end') {
+          return item.endDate === today;
+        } else {
+          return item.startDate <= today && today <= item.endDate;
+        }
+      });
     } else if (type === 'weekly') {
       sendList = allIpos.filter(item => item.startDate >= nextWeekStart && item.startDate <= nextWeekEnd);
     }
+
 
     let extResult = { slackSuccess: false, telegramSuccess: false };
     const hasExternalNotify = finalConfig.slackWebhookUrl || (finalConfig.telegramBotToken && finalConfig.telegramChatId);
